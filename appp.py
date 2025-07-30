@@ -1,89 +1,117 @@
-import streamlit as st
 import yt_dlp
 import os
 from pathlib import Path
+import zipfile
 
-# ===== FUNGSI: Ambil Info Video Tanpa Download =====
-def get_video_info(url):
-    ydl_opts = {"quiet": True, "skip_download": True}
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return {
-                "title": info.get("title", "Tanpa Judul"),
-                "uploader": info.get("uploader", "Tidak diketahui"),
-                "duration": info.get("duration", 0),
-                "thumbnail": info.get("thumbnail", ""),
-                "url": url
-            }
-    except Exception as e:
-        st.error(f"❌ Tidak bisa ambil info video: {e}")
+def list_playlist_videos(url):
+    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if 'entries' in info:
+            return info['entries']  # daftar video dari playlist
+        else:
+            return [info]  # single video
+
+def estimate_file_size(url, format_limit="best[height<=1080]"):
+    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        formats = info.get('formats', [])
+        for f in formats[::-1]:
+            if f.get('format_id') and f.get('height', 0) <= 1080:
+                size = f.get('filesize') or f.get('filesize_approx') or 0
+                if size:
+                    return size / (1024 * 1024)  # dalam MB
         return None
 
-# ===== FUNGSI-FUNGSI DOWNLOAD =====
-def download_video(url, mode="1080p", output_path="downloads"):
+def download_video(url, output_path="downloads", max_quality=1080):
     Path(output_path).mkdir(exist_ok=True)
-    
-    if mode == "1080p":
-        ydl_opts = {
-            'format': 'best[height<=1080]',
-            'outtmpl': f'{output_path}/%(title)s.%(ext)s',
-            'noplaylist': True,
-        }
-    elif mode == "best":
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': f'{output_path}/%(title)s.%(ext)s',
-            'noplaylist': True,
-        }
-    elif mode == "audio":
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': f'{output_path}/%(title)s.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'noplaylist': True,
-        }
-    else:
-        st.error("Mode tidak dikenali.")
-        return
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-            st.success(f"✓ Selesai! File disimpan di folder `{output_path}`")
-    except Exception as e:
-        st.error(f"❌ Gagal mengunduh: {e}")
+    ydl_opts = {
+        'format': f'bestvideo[height<={max_quality}]+bestaudio/best',
+        'outtmpl': f'{output_path}/%(title).80s.%(ext)s',
+        'merge_output_format': 'mp4',
+        'quiet': True
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
 
-# ===== UI STREAMLIT =====
-st.set_page_config(page_title="YouTube Downloader", page_icon="📥")
-st.title("📥 YouTube Downloader by @BangkitKubur")
+def download_audio(url, output_path="downloads"):
+    Path(output_path).mkdir(exist_ok=True)
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': f'{output_path}/%(title).80s.%(ext)s',
+        'quiet': True,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
 
-video_url = st.text_input("🔗 Masukkan URL YouTube di sini")
+def zip_downloads(folder="downloads", zip_name="downloads.zip"):
+    zip_path = Path(zip_name)
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(folder):
+            for file in files:
+                path = os.path.join(root, file)
+                arcname = os.path.relpath(path, folder)
+                zipf.write(path, arcname)
+    return zip_path
 
-if video_url:
-    info = get_video_info(video_url)
-    if info:
-        st.markdown("### 📺 Preview Video")
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.image(info["thumbnail"], use_column_width=True)
-        with col2:
-            dur_m, dur_s = divmod(info["duration"], 60)
-            st.markdown(f"**Judul:** {info['title']}")
-            st.markdown(f"**Channel:** {info['uploader']}")
-            st.markdown(f"**Durasi:** {dur_m} menit {dur_s} detik")
-        
-        st.markdown("---")
-        st.markdown("### ⬇️ Pilih Format Download")
+# === MAIN PROGRAM ===
+if __name__ == "__main__":
+    print("🎞️ YouTube Downloader - Versi Lengkap")
 
-        col_v1, col_v2, col_a = st.columns(3)
-        if col_v1.button("🎥 Video 1080p"):
-            download_video(video_url, mode="1080p")
-        if col_v2.button("💎 Best Quality (4K+)"):
-            download_video(video_url, mode="best")
-        if col_a.button("🎧 Audio MP3"):
-            download_video(video_url, mode="audio")
+    video_url = input("🔗 Masukkan URL video atau playlist: ").strip()
+    if not video_url:
+        print("❌ URL tidak boleh kosong!")
+        exit()
+
+    items = list_playlist_videos(video_url)
+    is_playlist = len(items) > 1
+
+    if is_playlist:
+        print(f"\n📃 Playlist terdeteksi: {len(items)} video ditemukan.")
+        print("Tampilkan daftar:")
+        for i, item in enumerate(items):
+            title = item.get("title", "Tanpa Judul")
+            print(f"{i+1}. {title}")
+        choice = input("\n📥 Download semua? (y/n): ").strip().lower()
+        if choice != 'y':
+            selected = input("Ketik nomor video yang ingin didownload (pisahkan dengan koma): ")
+            indexes = [int(x.strip()) - 1 for x in selected.split(",") if x.strip().isdigit()]
+            items = [items[i] for i in indexes]
+
+    print("\nPilih kualitas:")
+    print("1. Video 1080p (default)")
+    print("2. Video kualitas terbaik (4K jika ada)")
+    print("3. Audio MP3")
+    print("4. Video resolusi maksimal 720p (hemat kuota)")
+
+    mode = input("Pilih (1-4): ").strip()
+
+    for item in items:
+        url = f"https://www.youtube.com/watch?v={item['id']}"
+        title = item.get('title', 'Unknown')
+        size = estimate_file_size(url)
+        if size:
+            print(f"\n🎬 {title} (estimasi {size:.2f} MB)")
+        else:
+            print(f"\n🎬 {title} (ukuran tidak diketahui)")
+
+        try:
+            if mode == "1":
+                download_video(url, max_quality=1080)
+            elif mode == "2":
+                download_video(url, max_quality=4320)
+            elif mode == "3":
+                download_audio(url)
+            elif mode == "4":
+                download_video(url, max_quality=720)
+            else:
+                print("❌ Pilihan tidak valid.")
+        except Exception as e:
+            print(f"❌ Gagal download: {e}")
+
+    zip_file = zip_downloads()
+    print(f"\n📦 Semua file telah dijadikan ZIP: {zip_file}")
